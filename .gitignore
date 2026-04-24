@@ -1,0 +1,23 @@
+# Ignore binary files
+*.bin
+
+# Ignore build artifacts
+*.exe
+*.out
+*.o
+
+# Ignore temporary files
+*.tmp
+*.log
+
+# Ignore IDE/editor-specific files
+.vscode/
+.idea/
+*.swp
+
+# Ignore Go test cache
+testdata/
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
