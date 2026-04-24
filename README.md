@@ -1,4 +1,4 @@
-# Task 2 — Every Byte Costs Money
+# Every Byte Costs Money
 
 A typed key-value store with a custom binary serialization format,
 built to show that storage costs are a design decision, not an afterthought.
@@ -7,23 +7,31 @@ built to show that storage costs are a design decision, not an afterthought.
 
 A store that holds text, integers, floats, and binary values under
 string keys. On first run it serializes everything to disk in a compact
-binary format I designed. On restart it reloads from disk — fast, exact,
+binary format I designed. On restart it reloads from disk > fast, exact,
 and without re-processing anything.
 
-The interesting part isn't the store. It's the format — every field
+The interesting part isn't the store. It's the format, every field
 width, every byte decision, every tradeoff between speed, size, and
 durability is intentional and measured.
 
 ## Project structure
 main.go              entry point — first run vs reload detection
+
 store.go             typed in-memory key-value store
+
 serializer.go        binary format — write and read
+
 report.go            timing, file size, and memory measurement
+
 store_test.go        correctness tests
+
 benchmark_test.go    benchmarks vs JSON
+
 docs/
   store.md           how the data structure works
+  
   serializer.md      the binary format explained byte by byte
+  
   report.md          how timing and memory are measured
 
 ## Quick start
@@ -47,7 +55,7 @@ rm store.bin && go run .
 ## Testing
 
 You'll need Go installed (I used Go 1.21, anything recent works).
-No external dependencies — just clone and run.
+No external dependencies, just clone and run.
 
 ---
 
@@ -75,7 +83,7 @@ go test -v -race ./...
 ### Store tests
 
 **TestStore_SetGet**
-Sets all 4 value types — text, int, float, binary — and reads them
+Sets all 4 value types - text, int, float, binary and reads them
 back. Checks both the type tag and the actual value survived intact.
 
 ```bash
@@ -126,7 +134,7 @@ go test -v -run TestRoundTrip$ ./...
 
 **TestRoundTrip_LargeStore**
 Same idea but 10,000 mixed-type entries. Spot-checks entries at the
-start, middle, and end — makes sure the format holds at scale,
+start, middle, and end, makes sure the format holds at scale,
 not just for 4 entries.
 
 ```bash
@@ -172,7 +180,7 @@ go test -v -run TestVersionMismatch ./...
 **TestUnicodeKeys**
 Sets keys with Japanese characters and emoji, serializes, reloads,
 and verifies they came back correctly. Keys are raw UTF-8 so this
-should work — but search systems deal with multilingual data and
+should work, but search systems deal with multilingual data and
 it's worth testing explicitly.
 
 ```bash
@@ -196,7 +204,7 @@ go test -bench=BenchmarkSerialize -benchmem -run=^$ ./...
 
 **BenchmarkDeserialize_Custom vs BenchmarkDeserialize_JSON**
 Reads 10,000 entries back from disk repeatedly. This is the
-number that matters most — reload time on restart is a real
+number that matters most > reload time on restart is a real
 infrastructure cost. Custom wins by ~5.5x here.
 
 ```bash
@@ -205,7 +213,7 @@ go test -bench=BenchmarkDeserialize -benchmem -run=^$ ./...
 
 **TestSizeComparison**
 Writes the same 10,000 entries in both formats and reports
-file sizes side by side. Not a speed test — just a clear
+file sizes side by side. Not a speed test, just a clear
 answer to how much smaller the custom format is on disk.
 
 ```bash
@@ -245,7 +253,7 @@ times but wastes more memory per alloc — hence 5MB heap vs 1.63MB.
 
 This is the part I spent the most time thinking about.
 Correctness is the baseline. The real question is what you
-give up to get it — and whether those are the right tradeoffs
+give up to get it and whether those are the right tradeoffs
 for the problem.
 
 ### Space efficiency
@@ -258,11 +266,11 @@ The format stores each entry as:
 - 4 byte length prefix + raw bytes for text and binary
 
 This comes out to ~57.6 bytes per entry on disk vs ~180 bytes
-for JSON — a 3.1x reduction. The gap comes from eliminating
+for JSON — a 3.1 times reduction. The gap comes from eliminating
 field name strings, quotes, colons, and ASCII-encoding numbers.
 
 The data structure underneath is Go's built-in map. It's not
-custom — it's a language primitive, not an imported library.
+custom, it's a language primitive, not an imported library.
 The tradeoff is that Go's map carries ~50 bytes of runtime
 metadata per entry (hash buckets, overflow pointers). This
 is why RAM at 171 bytes/entry is 3x the disk size of 57.6 bytes.
@@ -288,7 +296,7 @@ get batched into one. Same on the read side with bufio.Reader.
 **io.ReadFull over Read** — Go's `Read` is not guaranteed to
 return all the bytes you asked for in one call. On large files
 the buffer boundary can fall mid-value, and plain `Read` returns
-fewer bytes silently. This caused a real bug in testing — entry 73
+fewer bytes silently. This caused a real bug in testing, entry 73
 read a stray byte as a type tag and everything after it was wrong.
 `io.ReadFull` loops internally until it has exactly what you asked
 for or returns an error. One function call, no silent misalignment.
@@ -307,7 +315,7 @@ a power loss in that window means the file is gone or corrupt.
 
 The cost is real — fsync takes 1-10ms depending on the disk.
 That's why custom serialize looks slower than JSON in the benchmark.
-It's not slower encoding — it's paying the durability tax that
+It's not slower encoding, it's paying the durability tax that
 JSON skips.
 
 Magic bytes and a version field are the other durability decisions.
