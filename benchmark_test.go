@@ -9,8 +9,6 @@ import (
 )
 
 // ── JSON-compatible representation ──────────────────────────────
-// We need a JSON-serializable version of our store
-// to make the comparison fair — same data, different format.
 
 type JSONValue struct {
 	Type string `json:"type"`

@@ -4,11 +4,10 @@ import (
 	"bytes"
 	"os"
 	"testing"
+	"time"
 )
 
 // ── helpers ──────────────────────────────────────────────────────
-// tmpFile returns a temp path and registers cleanup so the
-// test file is always deleted when the test finishes.
 func tmpFile(t *testing.T) string {
 	t.Helper()
 	f, err := os.CreateTemp("", "store_test_*.bin")
@@ -20,20 +19,16 @@ func tmpFile(t *testing.T) string {
 	return f.Name()
 }
 
-// seedStore builds a store with all 4 value types.
-// Used by multiple tests so the dataset is consistent.
 func seedStore() *Store {
 	s := NewStore()
-	s.Set("name",    TextValue("alice"))
-	s.Set("age",     IntValue(30))
-	s.Set("score",   FloatValue(98.6))
+	s.Set("name", TextValue("alice"))
+	s.Set("age", IntValue(30))
+	s.Set("score", FloatValue(98.6))
 	s.Set("payload", BinaryValue([]byte{0xDE, 0xAD, 0xBE, 0xEF}))
 	return s
 }
 
 // ── store tests ──────────────────────────────────────────────────
-
-// TestStore_SetGet verifies basic set and get for all 4 value types.
 func TestStore_SetGet(t *testing.T) {
 	s := seedStore()
 
@@ -62,7 +57,6 @@ func TestStore_SetGet(t *testing.T) {
 	}
 }
 
-// TestStore_Delete verifies that deleted keys are gone.
 func TestStore_Delete(t *testing.T) {
 	s := seedStore()
 	s.Delete("name")
@@ -75,8 +69,6 @@ func TestStore_Delete(t *testing.T) {
 	}
 }
 
-// TestStore_Overwrite verifies that setting the same key twice
-// keeps the latest value, not the first.
 func TestStore_Overwrite(t *testing.T) {
 	s := NewStore()
 	s.Set("key", IntValue(1))
@@ -88,7 +80,6 @@ func TestStore_Overwrite(t *testing.T) {
 	}
 }
 
-// TestStore_MissingKey verifies Get returns false for unknown keys.
 func TestStore_MissingKey(t *testing.T) {
 	s := NewStore()
 	if _, ok := s.Get("ghost"); ok {
@@ -98,8 +89,6 @@ func TestStore_MissingKey(t *testing.T) {
 
 // ── serializer tests ─────────────────────────────────────────────
 
-// TestRoundTrip is the core correctness test.
-// Serialize a store → wipe it → deserialize → verify every key/value.
 func TestRoundTrip(t *testing.T) {
 	path := tmpFile(t)
 	original := seedStore()
@@ -108,8 +97,6 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("serialize: %v", err)
 	}
 
-	// Deliberately set original to nil to prove we're loading
-	// from disk, not from any leftover in-memory state.
 	original = nil
 
 	loaded, err := Deserialize(path)
@@ -139,7 +126,6 @@ func TestRoundTrip(t *testing.T) {
 		}
 	}
 
-	// Verify specific values — not just types.
 	v, _ := loaded.Get("name")
 	if AsText(v) != "alice" {
 		t.Errorf("name: got %q want alice", AsText(v))
@@ -161,8 +147,6 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
-// TestRoundTrip_LargeStore verifies correctness at scale —
-// 10k mixed-type entries all survive serialize → deserialize.
 func TestRoundTrip_LargeStore(t *testing.T) {
 	path := tmpFile(t)
 	original := buildBenchStore(10_000)
@@ -180,8 +164,6 @@ func TestRoundTrip_LargeStore(t *testing.T) {
 		t.Errorf("entry count: got %d want %d", loaded.Len(), original.Len())
 	}
 
-	// Spot-check a sample of entries — not every one,
-	// but enough to catch format bugs.
 	for _, key := range []string{
 		"key:0", "key:1", "key:2", "key:3",
 		"key:999", "key:5000", "key:9999",
@@ -202,8 +184,6 @@ func TestRoundTrip_LargeStore(t *testing.T) {
 	}
 }
 
-// TestRoundTrip_EmptyStore verifies that an empty store
-// serializes and reloads without error.
 func TestRoundTrip_EmptyStore(t *testing.T) {
 	path := tmpFile(t)
 	s := NewStore()
@@ -221,12 +201,9 @@ func TestRoundTrip_EmptyStore(t *testing.T) {
 	}
 }
 
-// TestMagicByteDetection verifies that loading a garbage file
-// returns a clear error instead of silently loading bad data.
 func TestMagicByteDetection(t *testing.T) {
 	path := tmpFile(t)
 
-	// Write garbage — not a valid store file.
 	if err := os.WriteFile(path, []byte("this is not a store file"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -237,12 +214,9 @@ func TestMagicByteDetection(t *testing.T) {
 	}
 }
 
-// TestVersionMismatch verifies that a file with a different
-// version byte is rejected cleanly.
 func TestVersionMismatch(t *testing.T) {
 	path := tmpFile(t)
 
-	// Write magic bytes + wrong version (99)
 	data := []byte{'T', 'S', 'K', '2', 99}
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		t.Fatal(err)
@@ -254,8 +228,6 @@ func TestVersionMismatch(t *testing.T) {
 	}
 }
 
-// TestUnicodeKeys verifies keys with unicode characters
-// survive the round trip — key bytes are raw UTF-8.
 func TestUnicodeKeys(t *testing.T) {
 	path := tmpFile(t)
 	s := NewStore()
@@ -274,4 +246,41 @@ func TestUnicodeKeys(t *testing.T) {
 	if !ok || AsText(v) != "japanese" {
 		t.Error("unicode key failed round trip")
 	}
+}
+
+func TestReloadLatency(t *testing.T) {
+	// build and serialize once
+	s := buildBenchStore(10_000)
+	path := "latency_test.bin"
+	defer os.Remove(path)
+
+	if err := Serialize(s, path); err != nil {
+		t.Fatal(err)
+	}
+
+	// run 5 reloads and record each time
+	times := make([]time.Duration, 5)
+	for i := 0; i < 5; i++ {
+		start := time.Now()
+		loaded, err := Deserialize(path)
+		times[i] = time.Since(start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = loaded
+	}
+
+	t.Logf("Reload latencies across 5 runs:")
+	for i, d := range times {
+		label := "cold"
+		if i > 0 {
+			label = "warm"
+		}
+		t.Logf("  run %d (%s): %v", i+1, label, d)
+	}
+	t.Logf("cold: %v  →  warm: %v  (%.2fx faster)",
+		times[0],
+		times[len(times)-1],
+		float64(times[0])/float64(times[len(times)-1]),
+	)
 }

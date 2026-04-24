@@ -10,29 +10,26 @@ string keys. On first run it serializes everything to disk in a compact
 binary format I designed. On restart it reloads from disk > fast, exact,
 and without re-processing anything.
 
-The interesting part isn't the store. It's the format, every field
-width, every byte decision, every tradeoff between speed, size, and
-durability is intentional and measured.
 
 ## Project structure
-main.go              entry point — first run vs reload detection
+main.go -              entry point — first run vs reload detection
 
-store.go             typed in-memory key-value store
+store.go -       typed in-memory key-value store
 
-serializer.go        binary format — write and read
+serialize.go -       binary format — write and read
 
-report.go            timing, file size, and memory measurement
+report.go -           timing, file size, and memory measurement
 
-store_test.go        correctness tests
+store_test.go -       correctness tests
 
-benchmark_test.go    benchmarks vs JSON
+benchmark_test.go -   benchmarks vs JSON
 
 docs/
-  store.md           how the data structure works
+  store.md -        how the data structure works
   
-  serializer.md      the binary format explained byte by byte
+  serialize.md -    the binary format explained byte by byte
   
-  report.md          how timing and memory are measured
+  report.md -        how timing and memory are measured
 
 ## Quick start
 
@@ -220,6 +217,15 @@ answer to how much smaller the custom format is on disk.
 go test -v -run TestSizeComparison ./...
 ```
 
+**TestReloadLatency**
+Deserializes the same file 5 times in a row and prints each
+duration. Shows the OS page cache effect — first load hits disk,
+subsequent loads are served from memory and are noticeably faster.
+
+```bash
+go test -v -run TestReloadLatency ./...
+```
+
 ---
 
 ### What to expect
@@ -232,110 +238,131 @@ Results on my machine (Apple M4):
 | Metric | Custom | JSON |
 |---|---|---|
 | File size | 562 KB | 960 KB |
-| Serialize | ~5.5ms/op | ~2.5ms/op* |
-| Deserialize | ~1ms/op | ~5.5ms/op |
-| RAM on reload | 1.63 MB | 5.06 MB |
+| Serialize | ~6.1ms/op | ~2.4ms/op* |
+| Deserialize | ~1ms/op | ~5.7ms/op |
+| RAM on reload | 1.71 MB | 5.06 MB |
 | Serialize allocs | 10,038/op | 20,004/op |
 | Deserialize allocs | 55,043/op | 40,107/op |
 
 *Custom serialize includes `f.Sync()` — forces data to physical
-disk before returning. JSON benchmark skips this. Durability is
-a design choice, not a format property. With fsync on both,
+disk before returning. JSON benchmark skips this. With fsync on both,
 serialize speed is comparable.
 
 The deserialize alloc count looks higher for custom but each
 alloc is precisely sized to the value. JSON allocates fewer
-times but wastes more memory per alloc — hence 5MB heap vs 1.63MB.
+times but wastes more memory per alloc — hence 5MB heap vs 1.71MB.
 
 ---
 
-## Tradeoffs
+## Cold vs Warm Reload
 
-This is the part I spent the most time thinking about.
-Correctness is the baseline. The real question is what you
-give up to get it and whether those are the right tradeoffs
-for the problem.
+Running `go run .` multiple times shows the OS page cache effect.
+First reload hits disk. Subsequent reloads are served from memory.
+
+```bash
+rm store.bin && go run .    # first run — serialize
+go run .                    # cold reload
+go run .                    # warm reload
+```
+
+Results from my machine (Apple M4):
+
+| Run | Time | What happened |
+|---|---|---|
+| Serialize | 8.5ms | built 10k entries, wrote to disk, fsynced |
+| Cold reload | 7.73ms | file read from physical disk |
+| Warm reload | 1.26ms | OS already had file in page cache |
+| Warm reload | 1.21ms | stable |
+
+Cold to warm is ~6x faster — same file, same data, same code.
+The difference is entirely the OS page cache. No disk I/O on
+warm runs.
+
+This matters in production. First restart after a deploy pays
+the cold cost. Every restart after that pays the warm cost.
+A search index that reloads in 1.2ms is effectively instant.
+
+## Tradeoffs
 
 ### Space efficiency
 
-The format stores each entry as:
-- 2 bytes for key length (uint16, max 65535 — saves 2B vs uint32 per entry)
-- raw key bytes (no padding, no alignment)
-- 1 byte type tag (0=text, 1=int, 2=float, 3=binary)
-- 8 bytes fixed for int and float (no varint — fast decode, no branches)
-- 4 byte length prefix + raw bytes for text and binary
+Every field width is a deliberate choice, not a default.
 
-This comes out to ~57.6 bytes per entry on disk vs ~180 bytes
-for JSON — a 3.1 times reduction. The gap comes from eliminating
-field name strings, quotes, colons, and ASCII-encoding numbers.
+- Key length is 2 bytes (uint16) not 4 — max 65535 chars is
+  enough for any real key, saves 2 bytes per entry
+- Integers and floats are always 8 bytes fixed — no varint,
+  predictable decode speed, no branching
+- Type tag is 1 byte — 4 types fit in 4 values, no string labels
 
-The data structure underneath is Go's built-in map. It's not
-custom, it's a language primitive, not an imported library.
-The tradeoff is that Go's map carries ~50 bytes of runtime
-metadata per entry (hash buckets, overflow pointers). This
-is why RAM at 171 bytes/entry is 3x the disk size of 57.6 bytes.
-At 10M entries this becomes ~1.7GB of overhead you can't avoid
-with a built-in map. A flat open-addressing hash table with
-a known load factor would close that gap significantly —
-that's the obvious next step.
+Result: 57.6 bytes/entry on disk vs 98.4 bytes/entry for JSON.
+
+The data structure is Go's built-in map — a language primitive,
+not an imported library. The cost is ~94 bytes of runtime metadata
+per entry for O(1) lookup. At 10k entries that's acceptable.
+At 10M entries you'd want a flat array with binary search instead.
 
 ### Speed
 
-Three decisions that made the serializer fast:
+Three things that made a measurable difference:
 
-**Scratch buffer** — a single 8-byte slice reused for every
-fixed-width field write. The original version used `binary.Write`
-which goes through reflection and allocates internally. Switching
-to `binary.LittleEndian.PutUint*` into a reused buffer dropped
-serialize allocations from 35,040 to 10,038 per operation.
+- **Scratch buffer** — one 8-byte slice reused for all fixed-width
+  writes. Dropped serialize allocs from 35,040 to 10,038 per op
+  by removing binary.Write's reflection overhead
+- **bufio** — batches thousands of small writes into one syscall.
+  Same on the read side. Without it, every field is a separate
+  OS call
+- **io.ReadFull** — plain Read() doesn't guarantee returning all
+  bytes you asked for. Hit this as a real bug in testing — entry 73
+  read a stray byte as a type tag and corrupted everything after it.
+  io.ReadFull loops until it has exactly what you asked for
 
-**bufio.Writer / bufio.Reader** — without buffering, every field
-write is a separate syscall. With bufio, thousands of small writes
-get batched into one. Same on the read side with bufio.Reader.
+### Durability
 
-**io.ReadFull over Read** — Go's `Read` is not guaranteed to
-return all the bytes you asked for in one call. On large files
-the buffer boundary can fall mid-value, and plain `Read` returns
-fewer bytes silently. This caused a real bug in testing, entry 73
-read a stray byte as a type tag and everything after it was wrong.
-`io.ReadFull` loops internally until it has exactly what you asked
-for or returns an error. One function call, no silent misalignment.
+f.Sync() is called before Serialize returns. This forces the OS
+to flush its write buffer to physical disk — not just "handed off
+to the OS." Without it, a crash after Serialize returns could
+still lose the file.
 
-**Pre-allocated map** — `make(map[string]Value, entryCount)` on
-reload tells Go exactly how many entries are coming. Without it
-the map resizes ~7 times as it fills up, each time allocating a
-new backing array and copying everything over.
+Cost: 1-10ms per serialize. That's why custom serialize looks
+slower than JSON in benchmarks — JSON skips this call entirely.
+Durability is a design decision, not a format property.
 
-### Durability awareness
+Magic bytes + version field add 5 bytes per file total.
+Cheap insurance against loading a wrong file or an old format
+silently. Both return a clear error immediately.
 
-`f.Sync()` is called after every serialize before the function
-returns. This forces the OS to flush its write buffer to physical
-disk. Without it, "written" just means "handed to the OS" —
-a power loss in that window means the file is gone or corrupt.
+## Where I'd use this in FailureChain
 
-The cost is real — fsync takes 1-10ms depending on the disk.
-That's why custom serialize looks slower than JSON in the benchmark.
-It's not slower encoding, it's paying the durability tax that
-JSON skips.
+My existing project — FailureChain — is an LLM-based system that
+debugs infrastructure failures. It ingests incident logs and metrics,
+builds a GraphRAG for structural dependencies between services, and
+a RAG for historical failure analogs. Then fuses both to give an
+LLM context about what broke and why.
 
-Magic bytes and a version field are the other durability decisions.
-4 bytes of overhead per file to guarantee you never silently load
-a wrong or corrupted file. If the first 4 bytes aren't "TSK2",
-the deserializer errors immediately. If the version doesn't match,
-same thing. Silent failures that propagate through a system are
-far more expensive than a loud error on startup.
+The problem this store solves for that system:
 
-### What I'd change at scale
+**Incident metadata store** — every incident chunk has mixed metadata.
+Timestamp (int), service name (text), severity score (float),
+raw log payload (binary). Right now that lives in memory and
+disappears on restart. This store would persist it to disk in
+a compact format and reload it in under 2ms — no re-processing
+on startup.
 
-At 1M entries the current design starts showing its limits.
-The map metadata alone would be ~50MB. Loading the entire store
-into memory before serving any queries means a slow cold start.
-A memory-mapped file with a sorted index block at the end of the
-file would let you seek directly to any key without loading
-everything — that's how Lucene's `.fdx` / `.fdt` split works.
-Compression per value type (LZ4 for text, delta encoding for
-sorted integers) would cut disk size by another 3-5x.
-Those are the right next steps, not fixes to what's here.
+**Embedding cache** — generating embeddings for 500k log chunks
+costs real money in API calls or GPU time. An embedding is just
+a []float32 — raw bytes. TypeBinary in this store handles that
+exactly. Serialize once, reload fast. Avoid re-embedding on
+every restart.
+
+**GraphRAG node store** — each node in the dependency graph has
+a name (text), a type like "service" or "database" (text), a
+failure count (int), and a risk score (float). That's all 4
+value types in one node. This store holds that naturally.
+
+The format I built here is essentially what sits under a RAG
+index between restarts. Lucene solves this for text search in Java.
+This is a Go-native version of the same idea, scoped to what
+FailureChain actually needs.
 
 ---
 
@@ -345,7 +372,7 @@ For detailed explanations of the smaller concepts used in each file:
 
 - [store.md](docs/store.md) — typed values, why raw bytes internally,
   the map tradeoff
-- [serializer.md](docs/serializer.md) — the wire format byte by byte,
+- [serialize.md](docs/serialize.md) — the wire format byte by byte,
   scratch buffer, io.ReadFull, fsync
 - [report.md](docs/report.md) — runtime.MemStats, os.Stat,
   cold vs warm reload, what heap delta actually measures

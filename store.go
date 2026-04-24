@@ -5,8 +5,6 @@ import (
 	"math"
 )
 
-// ValueType is a 1-byte tag that tells the serializer
-// how to encode/decode the value. Kept as uint8 = 1 byte on disk.
 type ValueType uint8
 
 const (
@@ -16,22 +14,15 @@ const (
 	TypeBinary ValueType = 3
 )
 
-// Value holds a type tag and raw bytes.
-// Everything is stored as []byte internally —
-// the Type field tells us how to interpret those bytes.
 type Value struct {
 	Type ValueType
 	Data []byte
 }
 
-// Store is the core data structure —
-// a map from string keys to typed values.
 type Store struct {
 	entries map[string]Value
 }
 
-// NewStore initialises the map.
-// Always use this — a zero-value Store has a nil map and will panic on Set.
 func NewStore() *Store {
 	return &Store{
 		entries: make(map[string]Value),
@@ -57,8 +48,6 @@ func (s *Store) Len() int {
 	return len(s.entries)
 }
 
-// Entries exposes the map for the serializer to iterate.
-// Returns a copy so the serializer can't mutate internal state.
 func (s *Store) Entries() map[string]Value {
 	out := make(map[string]Value, len(s.entries))
 	for k, v := range s.entries {
@@ -68,8 +57,6 @@ func (s *Store) Entries() map[string]Value {
 }
 
 // ── Helper constructors ─────────────────────────────────────────
-// These let you write TextValue("hello") instead of
-// manually building Value{Type: TypeText, Data: []byte("hello")} every time.
 
 func TextValue(s string) Value {
 	return Value{Type: TypeText, Data: []byte(s)}
@@ -94,7 +81,6 @@ func BinaryValue(b []byte) Value {
 }
 
 // ── Decode helpers ──────────────────────────────────────────────
-// Mirror of the constructors — used in tests and main to read values back.
 
 func AsText(v Value) string  { return string(v.Data) }
 func AsInt(v Value) int64   { return int64(binary.LittleEndian.Uint64(v.Data)) }

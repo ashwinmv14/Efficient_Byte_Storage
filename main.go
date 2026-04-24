@@ -11,8 +11,6 @@ const storePath = "store.bin"
 const entryCount = 10_000
 
 func main() {
-	// Check if store.bin already exists.
-	// First run: build + serialize. Subsequent runs: reload.
 	_, err := os.Stat(storePath)
 	firstRun := os.IsNotExist(err)
 
@@ -23,8 +21,6 @@ func main() {
 	}
 }
 
-// runFirstRun builds a large store with mixed types,
-// serializes it, and prints the first-run report.
 func runFirstRun() {
 	fmt.Printf("Building store with %d entries...\n\n", entryCount)
 
@@ -39,7 +35,6 @@ func runFirstRun() {
 	PrintFirstRun(report)
 }
 
-// runReload loads from disk and prints the reload report.
 func runReload() {
 	fmt.Printf("Found %s — reloading...\n\n", storePath)
 
@@ -52,10 +47,6 @@ func runReload() {
 	PrintReload(report)
 }
 
-// buildStore generates a realistic mixed-type dataset.
-// 4 value types distributed evenly across entries.
-// This simulates a real index: doc text, numeric metadata,
-// float scores, and binary payloads (e.g. embeddings).
 func buildStore(n int) *Store {
 	s := NewStore()
 

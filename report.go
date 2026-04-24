@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// Report holds the numbers we care about.
 // First run fills SerializeTime + FileSizeBytes.
 // Future runs fill ReloadTime + HeapDeltaBytes.
 type Report struct {
@@ -18,8 +17,6 @@ type Report struct {
 	HeapDeltaBytes uint64
 }
 
-// MeasureSerialize times the Serialize call and
-// stats the file immediately after to get exact disk size.
 func MeasureSerialize(s *Store, path string) (Report, error) {
 	start := time.Now()
 
@@ -29,7 +26,6 @@ func MeasureSerialize(s *Store, path string) (Report, error) {
 
 	elapsed := time.Since(start)
 
-	// os.Stat gives us the file size without reading the file.
 	info, err := os.Stat(path)
 	if err != nil {
 		return Report{}, err
@@ -42,11 +38,7 @@ func MeasureSerialize(s *Store, path string) (Report, error) {
 	}, nil
 }
 
-// MeasureDeserialize captures heap before and after loading
-// so we can report exactly how many bytes the store occupies in RAM.
 func MeasureDeserialize(path string) (*Store, Report, error) {
-	// Force GC before measuring so leftover allocations
-	// from serialization don't pollute our heap delta number.
 	runtime.GC()
 
 	var before runtime.MemStats
@@ -94,7 +86,6 @@ func PrintReload(r Report) {
 }
 
 // formatBytes turns raw byte counts into human-readable strings.
-// e.g. 48392 → "47.3 KB"
 func formatBytes(b int64) string {
 	switch {
 	case b >= 1<<20:
